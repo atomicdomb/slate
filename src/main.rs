@@ -38,9 +38,36 @@ struct App {
     allow_quit: bool,
 }
 
+/// The icon to hand the windowing system.
+///
+/// Inside a macOS `.app` this is deliberately empty: that tells eframe to
+/// leave the Dock alone, so the bundle's own icon stays. (With no icon set
+/// at all, eframe substitutes its default "e" logo.) Everywhere else the
+/// icon is set from the same picture the bundle is built from.
+fn app_icon() -> Arc<egui::IconData> {
+    // Decoded once; every window shares it.
+    static ICON: std::sync::OnceLock<Arc<egui::IconData>> = std::sync::OnceLock::new();
+    ICON.get_or_init(|| Arc::new(load_app_icon())).clone()
+}
+
+fn load_app_icon() -> egui::IconData {
+    let bundled = std::env::current_exe().is_ok_and(|p| p.to_string_lossy().contains(".app/Contents/MacOS/"));
+    if bundled {
+        return egui::IconData::default();
+    }
+    match image::load_from_memory(include_bytes!("../assets/AppIcon.png")) {
+        Ok(picture) => {
+            let small = picture.resize(256, 256, image::imageops::FilterType::Triangle).to_rgba8();
+            egui::IconData { width: small.width(), height: small.height(), rgba: small.into_raw() }
+        }
+        Err(_) => egui::IconData::default(),
+    }
+}
+
 fn window_builder(title: &str) -> ViewportBuilder {
     ViewportBuilder::default()
         .with_title(title)
+        .with_icon(app_icon())
         .with_app_id(APP_ID)
         .with_inner_size([1500.0, 960.0])
         .with_min_inner_size([480.0, 320.0])

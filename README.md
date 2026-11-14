@@ -11,6 +11,14 @@ it is seconds. `cargo install --path .` puts a `slate` binary on your PATH.
     slate [--theme NAME] [FOLDER | FILE]...
     slate --export-icons
 
+### As a macOS app
+
+    ./bundle-macos.sh --install
+
+builds `target/Slate.app` with an icon and copies it to `/Applications`
+(leave off `--install` to only build it). It needs nothing beyond Rust and
+the tools macOS ships with. Run it again after changing the code.
+
 With no arguments it reopens the folders that were open last time. Several
 folders on the command line open one window each.
 
