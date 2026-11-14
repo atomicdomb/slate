@@ -11,7 +11,30 @@ it is seconds. `cargo install --path .` puts a `slate` binary on your PATH.
     slate [--theme NAME] [FOLDER | FILE]...
     slate --export-icons
 
-With no arguments it reopens the last folder.
+With no arguments it reopens the folders that were open last time. Several
+folders on the command line open one window each.
+
+## Windows and projects
+
+One window is one project. *File → Open Folder…* (or a folder dropped on the
+window) opens in the current window if it is empty, and in a new window
+otherwise, so two or three projects sit side by side, each with its own
+sidebar, tabs, find bar and search results. *File → Open Recent* lists the
+last twelve folders; picking one that is already open brings its window
+forward. *New Window* opens an empty one.
+
+Closing a window (its close button, or Cmd+Shift+W) asks about that window's
+unsaved files. Quitting asks once about unsaved files in all windows. The
+theme is shared: changing it in one window changes them all.
+
+## Menus
+
+A menu bar runs along the top of every window: **File** (new, open, open
+recent, save, close, quit), **Find** (find, replace, find in files, go to
+file, go to line) and **View** (sidebar, tabs). Each item shows its shortcut.
+Menus and shortcuts run the same commands, defined in one table in
+`src/menu.rs`. On macOS the bar is inside the window rather than in the
+system menu bar at the top of the screen.
 
 ## Highlighting and themes
 
@@ -90,6 +113,8 @@ and `node_modules` are skipped, as are binary files and files over 4 MB.
 | Cmd+O / Cmd+Shift+O          | Open file / open folder                 |
 | Cmd+S / Cmd+Shift+S          | Save / save as                          |
 | Cmd+N / Cmd+W                | New tab / close tab                     |
+| Cmd+Shift+N / Cmd+Shift+W    | New window / close window               |
+| Cmd+Q                        | Quit                                    |
 | Ctrl+Tab / Ctrl+Shift+Tab    | Next / previous tab                     |
 | Cmd+B                        | Show or hide the sidebar                |
 | Cmd+F                        | Find; Enter / Shift+Enter to step       |
@@ -121,14 +146,16 @@ minimap to scroll.
 | `src/tree.rs`      | Folder sidebar, file index, fuzzy matching              |
 | `src/search.rs`    | Find in files: background search and its results        |
 | `src/icons.rs`     | Icon sprite sheets: built-in, custom, name-to-icon map  |
-| `src/main.rs`      | Window, tabs, status bar, find, dialogs, shortcuts      |
+| `src/workspace.rs` | One window: tabs, status bar, find, dialogs             |
+| `src/menu.rs`      | Commands, their shortcuts, the menu bar                 |
+| `src/main.rs`      | The set of windows and what they share; startup         |
 
 `cargo test` covers the buffer, the highlighter, searching and the icon mapping.
 
 ## Not there yet
 
 Multiple cursors, regex search, replace across files, bracket auto-closing,
-soft wrap, split panes, and reloading files changed on disk by another
+soft wrap, split panes, a native macOS menu bar, and reloading files changed on disk by another
 program.
 
 [syntect]: https://github.com/trishume/syntect
