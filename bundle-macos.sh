@@ -49,6 +49,30 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>LSApplicationCategoryType</key>   <string>public.app-category.developer-tools</string>
     <key>NSHighResolutionCapable</key>     <true/>
     <key>NSPrincipalClass</key>            <string>NSApplication</string>
+    <!-- What Finder may hand to Slate. "Alternate" means: offer Slate under
+         Open With, but do not make it the default for anything. -->
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key>    <string>Text or source file</string>
+            <key>CFBundleTypeRole</key>    <string>Editor</string>
+            <key>LSHandlerRank</key>       <string>Alternate</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>public.text</string>
+                <string>public.data</string>
+            </array>
+        </dict>
+        <dict>
+            <key>CFBundleTypeName</key>    <string>Folder</string>
+            <key>CFBundleTypeRole</key>    <string>Editor</string>
+            <key>LSHandlerRank</key>       <string>Alternate</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>public.folder</string>
+            </array>
+        </dict>
+    </array>
 </dict>
 </plist>
 PLIST
@@ -59,5 +83,8 @@ echo "Built $APP"
 if [[ "${1:-}" == "--install" ]]; then
     rm -rf /Applications/Slate.app
     cp -R "$APP" /Applications/Slate.app
+    # Tell Finder about the file types the new copy accepts.
+    LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+    [[ -x "$LSREGISTER" ]] && "$LSREGISTER" -f /Applications/Slate.app || true
     echo "Installed /Applications/Slate.app"
 fi

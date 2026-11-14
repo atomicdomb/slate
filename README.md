@@ -19,6 +19,13 @@ builds `target/Slate.app` with an icon and copies it to `/Applications`
 (leave off `--install` to only build it). It needs nothing beyond Rust and
 the tools macOS ships with. Run it again after changing the code.
 
+The app registers as an editor for text files and folders, so Finder's
+*Open With → Slate* works, as does dropping a file or folder on the Dock
+icon. A file opens in the window whose project contains it (otherwise the
+front window); a folder gets its own window. Slate never makes itself the
+default app for a file type; do that per type in Finder's *Get Info* if you
+want it. The receiving end is `src/macos_open.m` and `src/open_events.rs`.
+
 With no arguments it reopens the folders that were open last time. Several
 folders on the command line open one window each.
 

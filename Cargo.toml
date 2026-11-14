@@ -11,6 +11,9 @@ two-face = { version = "0.4", default-features = false, features = ["syntect-fan
 rfd = "0.15"
 image = { version = "0.25", default-features = false, features = ["png"] }
 
+[build-dependencies]
+cc = "1"
+
 [profile.dev]
 opt-level = 1
 

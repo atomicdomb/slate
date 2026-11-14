@@ -11,6 +11,7 @@ mod editor;
 mod highlight;
 mod icons;
 mod menu;
+mod open_events;
 mod search;
 mod theme;
 mod tree;
@@ -117,6 +118,7 @@ impl App {
             icons: Rc::new(RefCell::new(icons::Icons::load(&cc.egui_ctx, settings.as_deref()))),
             recent: Rc::new(RefCell::new(lines(stored("recent")))),
         };
+        open_events::set_waker(&cc.egui_ctx);
         let mut app = Self { sh, theme, windows: Vec::new(), next_id: 0, allow_quit: false };
         app.add_window(None);
         apply_visuals(&cc.egui_ctx, app.windows[0].palette());
@@ -147,6 +149,23 @@ impl App {
             window.open_folder(folder);
         }
         self.windows.push(window);
+    }
+
+    /// Open something the OS handed us (Finder's "Open With", the Dock).
+    /// A folder gets a window; a file goes to the window whose project it
+    /// belongs to, or failing that the one in front.
+    fn open_external(&mut self, path: PathBuf, ctx: &egui::Context, now: f64) {
+        let path = std::fs::canonicalize(&path).unwrap_or(path);
+        if path.is_dir() {
+            let any = self.windows[0].id;
+            return self.handle(any, Request::NewWindow(Some(path)), ctx, now);
+        }
+        let depth = |w: &Workspace| w.folder().filter(|f| path.starts_with(f)).map(|f| f.components().count());
+        let owner = (0..self.windows.len()).filter(|i| depth(&self.windows[*i]).is_some()).max_by_key(|i| depth(&self.windows[*i]));
+        let i = owner.or_else(|| self.windows.iter().position(|w| w.focused)).unwrap_or(0);
+        self.windows[i].open_path(&path, now);
+        let viewport = if i == 0 { ViewportId::ROOT } else { viewport_of(&self.windows[i]) };
+        ctx.send_viewport_cmd_to(viewport, ViewportCommand::Focus);
     }
 
     fn quit(&mut self, ctx: &egui::Context) {
@@ -250,6 +269,9 @@ impl eframe::App for App {
         for (window, request) in requests {
             self.handle(window, request, ctx, now);
         }
+        for path in open_events::take() {
+            self.open_external(path, ctx, now);
+        }
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
@@ -274,6 +296,7 @@ fn main() -> eframe::Result {
         }
         return Ok(());
     }
+    open_events::install();
     let options = eframe::NativeOptions { viewport: window_builder("Slate"), ..Default::default() };
     eframe::run_native(APP_ID, options, Box::new(move |cc| Ok(Box::new(App::new(cc, args)))))
 }
