@@ -9,6 +9,7 @@ The first build takes a few minutes (it compiles the GUI stack); after that
 it is seconds. `cargo install --path .` puts a `slate` binary on your PATH.
 
     slate [--theme NAME] [FOLDER | FILE]...
+    slate --export-icons
 
 With no arguments it reopens the last folder.
 
@@ -32,6 +33,36 @@ Gruvbox, One Half, Solarized, GitHub, ...). To add your own, drop any
 
 The sidebar, tab strip, gutter and selection colours are derived from the
 theme, so the whole window follows it.
+
+## Sidebar icons
+
+Files and folders get an icon from a built-in sprite sheet
+(`assets/icons.png`). To use your own art, put an `icons.png` in the
+settings folder (the parent of the themes folder above, e.g.
+`~/Library/Application Support/slate/icons.png`). The quickest start is
+
+    slate --export-icons
+
+which writes the built-in sheet there for you to paint over. Slate re-reads
+the file whenever its window regains focus, so you can edit and flip back.
+
+The sheet is a grid 8 cells wide. Cells are square and their size is the
+image width divided by 8, so 128 px wide means 16 px icons, 256 means 32 px
+(the built-in size, sharp on Retina), 512 means 64 px. Icons are always
+drawn at 16 points. Each cell belongs to one icon:
+
+|       | 0      | 1           | 2     | 3    | 4      | 5          | 6      | 7       |
+|-------|--------|-------------|-------|------|--------|------------|--------|---------|
+| row 0 | folder | folder open | file  | Rust | TOML   | Markdown   | JSON   | YAML    |
+| row 1 | text   | image       | shell | lock | git    | config     | shader | C       |
+| row 2 | C++    | Python      | JS    | TS   | HTML   | CSS        | audio  | archive |
+
+"file" is the fallback for anything unrecognised. A cell you leave fully
+transparent keeps the built-in icon, and a sheet with fewer rows is fine, so
+you can replace just the few you care about. Which file names map to which
+icon is the `match` in `src/icons.rs`; adding a new icon is a new `Icon`
+variant (appended, so existing sheets stay valid), a line in that `match`,
+and a cell in the sheet. `assets/make_icons.py` redraws the built-in sheet.
 
 ## Keys
 
@@ -70,9 +101,10 @@ minimap to scroll.
 | `src/theme.rs`     | Theme loading and the chrome palette derived from a theme |
 | `src/editor.rs`    | The painted editor: gutter, text, caret, minimap, input |
 | `src/tree.rs`      | Folder sidebar, file index, fuzzy matching              |
+| `src/icons.rs`     | Icon sprite sheets: built-in, custom, name-to-icon map  |
 | `src/main.rs`      | Window, tabs, status bar, find, dialogs, shortcuts      |
 
-`cargo test` covers the buffer and the highlighter.
+`cargo test` covers the buffer, the highlighter and the icon mapping.
 
 ## Not there yet
 

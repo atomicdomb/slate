@@ -2,11 +2,14 @@
 
 use std::path::{Path, PathBuf};
 
-use eframe::egui::{self, pos2, vec2, Align2, FontId, Rect, Sense, Shape, Stroke, Ui};
+use eframe::egui::{self, pos2, vec2, Align2, FontId, Rect, Sense, Ui};
 
+use crate::icons::{Icon, Icons};
 use crate::theme::Palette;
 
 const ROW: f32 = 23.0;
+/// Icons are drawn at this size whatever the sheet's resolution.
+const ICON: f32 = 16.0;
 /// Folders that are never worth indexing for quick-open.
 const SKIP: &[&str] = &[".git", "target", "node_modules", ".DS_Store"];
 const INDEX_LIMIT: usize = 40_000;
@@ -15,6 +18,7 @@ pub struct Node {
     pub path: PathBuf,
     name: String,
     is_dir: bool,
+    icon: Icon,
     open: bool,
     /// Read from disk the first time the folder is opened.
     children: Option<Vec<Node>>,
@@ -27,8 +31,10 @@ fn read_dir(dir: &Path) -> Vec<Node> {
         .flatten()
         .map(|e| {
             let path = e.path();
+            let name = e.file_name().to_string_lossy().to_string();
             Node {
-                name: e.file_name().to_string_lossy().to_string(),
+                icon: Icon::for_file(&name),
+                name,
                 is_dir: path.is_dir(),
                 open: false,
                 children: None,
@@ -50,6 +56,7 @@ impl Node {
             children: Some(read_dir(&path)),
             name,
             is_dir: true,
+            icon: Icon::Folder,
             open: true,
             path,
         }
@@ -70,25 +77,30 @@ impl Node {
     }
 
     /// Draw this node and its open descendants. Returns a clicked file.
-    pub fn show(&mut self, ui: &mut Ui, depth: usize, active: Option<&Path>, pal: &Palette) -> Option<PathBuf> {
+    pub fn show(
+        &mut self,
+        ui: &mut Ui,
+        depth: usize,
+        active: Option<&Path>,
+        pal: &Palette,
+        icons: &Icons,
+    ) -> Option<PathBuf> {
         let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW), Sense::click());
         let is_active = !self.is_dir && active == Some(self.path.as_path());
         let painter = ui.painter();
         if is_active || resp.hovered() {
             painter.rect_filled(rect, 0.0, if is_active { pal.selection } else { pal.hover });
         }
-        let x = rect.left() + 14.0 + depth as f32 * 16.0;
+        let x = rect.left() + 12.0 + depth as f32 * 16.0;
         let mid = rect.center().y;
-        if self.is_dir {
-            let (a, b, c) = if self.open {
-                (pos2(x - 4.0, mid - 2.5), pos2(x + 4.0, mid - 2.5), pos2(x, mid + 3.0))
-            } else {
-                (pos2(x - 2.5, mid - 4.0), pos2(x - 2.5, mid + 4.0), pos2(x + 3.0, mid))
-            };
-            painter.add(Shape::convex_polygon(vec![a, b, c], pal.dim, Stroke::NONE));
-        }
+        let icon = match (self.is_dir, self.open) {
+            (true, true) => Icon::FolderOpen,
+            (true, false) => Icon::Folder,
+            (false, _) => self.icon,
+        };
+        icons.paint(painter, icon, Rect::from_min_size(pos2(x, mid - ICON / 2.0), vec2(ICON, ICON)));
         painter.with_clip_rect(Rect::from_min_max(rect.min, pos2(ui.clip_rect().right(), rect.bottom()))).text(
-            pos2(x + 12.0, mid),
+            pos2(x + ICON + 7.0, mid),
             Align2::LEFT_CENTER,
             &self.name,
             FontId::proportional(13.0),
@@ -106,7 +118,7 @@ impl Node {
         if self.is_dir && self.open {
             let path = &self.path;
             for child in self.children.get_or_insert_with(|| read_dir(path)) {
-                clicked = child.show(ui, depth + 1, active, pal).or(clicked);
+                clicked = child.show(ui, depth + 1, active, pal, icons).or(clicked);
             }
         }
         clicked

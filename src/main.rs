@@ -1,10 +1,12 @@
 //! Slate: a small native code editor.
 //!
 //!   slate [--theme NAME] [FOLDER | FILE]...
+//!   slate --export-icons
 
 mod buffer;
 mod editor;
 mod highlight;
+mod icons;
 mod theme;
 mod tree;
 
@@ -74,6 +76,7 @@ struct App {
     themes: Themes,
     theme: usize,
     pal: Palette,
+    icons: icons::Icons,
     docs: Vec<Doc>,
     active: usize,
     root: Option<tree::Node>,
@@ -133,6 +136,7 @@ impl App {
             .unwrap_or(0);
         let pal = Palette::from_theme(&themes.list[theme].1);
         apply_visuals(&cc.egui_ctx, &pal);
+        let icons = icons::Icons::load(&cc.egui_ctx, eframe::storage_dir(APP_ID).as_deref());
 
         let mut app = Self {
             ss,
@@ -140,6 +144,7 @@ impl App {
             themes,
             theme,
             pal,
+            icons,
             docs: Vec::new(),
             active: 0,
             root: None,
@@ -499,7 +504,7 @@ impl App {
                 tree::header(ui, &pal);
                 ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
                     ui.spacing_mut().item_spacing.y = 0.0;
-                    if let Some(path) = root.show(ui, 0, active.as_deref(), &pal) {
+                    if let Some(path) = root.show(ui, 0, active.as_deref(), &pal, &self.icons) {
                         actions.push(Action::Open(path));
                     }
                     ui.add_space(12.0);
@@ -884,6 +889,9 @@ impl eframe::App for App {
             if let Some(root) = &mut self.root {
                 root.refresh();
             }
+            if let Some(problem) = self.icons.reload(ctx) {
+                self.say(problem, now);
+            }
         }
         if self.prompt.is_none() {
             self.shortcuts(ctx, now);
@@ -925,6 +933,19 @@ impl eframe::App for App {
 
 fn main() -> eframe::Result {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|a| a == "--export-icons") {
+        let result = eframe::storage_dir(APP_ID)
+            .ok_or_else(|| "no settings folder on this system".to_string())
+            .and_then(|dir| icons::export(&dir));
+        match result {
+            Ok(path) => println!("Wrote {}\nEdit it; Slate reloads it when its window regains focus.", path.display()),
+            Err(e) => {
+                eprintln!("slate: {e}");
+                std::process::exit(1);
+            }
+        }
+        return Ok(());
+    }
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Slate")
