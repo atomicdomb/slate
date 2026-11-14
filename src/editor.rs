@@ -52,31 +52,48 @@ pub struct Env<'a> {
     pub pal: &'a Palette,
     pub ss: &'a SyntaxSet,
     pub theme: &'a Theme,
-    /// Text to outline wherever it occurs, and whether case matters.
-    pub find: Option<(&'a str, bool)>,
+    /// Outline every occurrence of this.
+    pub find: Option<&'a Query>,
     pub grab_focus: bool,
     /// False while a dialog is up: keep focus but ignore the keyboard.
     pub enabled: bool,
 }
 
-/// Occurrences of `needle` in `line`, as char-column ranges.
-pub fn find_in_line(line: &str, needle: &str, case: bool) -> Vec<(usize, usize)> {
-    if needle.is_empty() {
-        return Vec::new();
+/// What to search for, and how strictly.
+#[derive(Clone, Default, PartialEq, Eq, Debug)]
+pub struct Query {
+    pub text: String,
+    pub case: bool,
+    /// Only match when not glued to other letters, digits or `_`.
+    pub word: bool,
+}
+
+impl Query {
+    /// Occurrences in `line`, as char-column ranges, left to right and
+    /// never overlapping.
+    pub fn matches(&self, line: &str) -> Vec<(usize, usize)> {
+        if self.text.is_empty() {
+            return Vec::new();
+        }
+        // ASCII-only folding keeps byte offsets identical to the original.
+        let (hay, needle) = if self.case {
+            (line.to_string(), self.text.clone())
+        } else {
+            (line.to_ascii_lowercase(), self.text.to_ascii_lowercase())
+        };
+        let width = self.text.chars().count();
+        let wordy = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
+        hay.match_indices(&needle)
+            .filter(|(at, m)| {
+                !self.word
+                    || !(wordy(line[..*at].chars().next_back()) || wordy(line[at + m.len()..].chars().next()))
+            })
+            .map(|(at, _)| {
+                let col = line[..at].chars().count();
+                (col, col + width)
+            })
+            .collect()
     }
-    // ASCII-only folding keeps byte offsets identical to the original.
-    let (hay, needle) = if case {
-        (line.to_string(), needle.to_string())
-    } else {
-        (line.to_ascii_lowercase(), needle.to_ascii_lowercase())
-    };
-    let width = needle.chars().count();
-    hay.match_indices(&needle)
-        .map(|(at, _)| {
-            let col = line[..at].chars().count();
-            (col, col + width)
-        })
-        .collect()
 }
 
 fn layout(ui: &Ui, text: &str, spans: &[Span], font: &FontId, fg: Color32) -> Arc<Galley> {
@@ -389,8 +406,8 @@ pub fn show(ui: &mut Ui, buf: &mut Buffer, hl: &mut Highlighter, view: &mut View
                 text_painter.rect_filled(r, 2.0, pal.selection);
             }
         }
-        if let Some((needle, case)) = env.find {
-            for (a, b) in find_in_line(&buf.lines[i], needle, case) {
+        if let Some(query) = env.find {
+            for (a, b) in query.matches(&buf.lines[i]) {
                 let r = Rect::from_min_max(pos2(x_of(a), y + 1.0), pos2(x_of(b), y + row_h - 1.0));
                 text_painter.rect_filled(r, 2.0, pal.find.gamma_multiply(0.18));
                 text_painter.rect_stroke(r, 2.0, Stroke::new(1.0_f32, pal.find), StrokeKind::Inside);
@@ -479,4 +496,19 @@ pub fn show(ui: &mut Ui, buf: &mut Buffer, hl: &mut Highlighter, view: &mut View
         }
     }
     mini.add(Shape::mesh(mesh));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Query;
+
+    #[test]
+    fn query_matching() {
+        let q = |text: &str, case, word| Query { text: text.into(), case, word };
+        assert_eq!(q("ab", false, false).matches("AB cab Ab"), vec![(0, 2), (4, 6), (7, 9)]);
+        assert_eq!(q("Ab", true, false).matches("AB cab Ab"), vec![(7, 9)]);
+        assert_eq!(q("tier", false, true).matches("Tier tier_blue (tier) tiers"), vec![(0, 4), (16, 20)]);
+        assert_eq!(q("ö", false, false).matches("höhö"), vec![(1, 2), (3, 4)]);
+        assert!(q("", false, false).matches("anything").is_empty());
+    }
 }

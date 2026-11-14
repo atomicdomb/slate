@@ -64,6 +64,22 @@ icon is the `match` in `src/icons.rs`; adding a new icon is a new `Icon`
 variant (appended, so existing sheets stay valid), a line in that `match`,
 and a cell in the sheet. `assets/make_icons.py` redraws the built-in sheet.
 
+## Find, replace, find in files
+
+**Find** (Cmd+F) outlines every match and steps through them with Enter.
+`Aa` matches case, `W` matches whole words only.
+
+**Replace** (Cmd+Option+F on macOS, Ctrl+H elsewhere) adds a second field;
+Tab moves between the two. Enter or *Replace* swaps the selected match and
+moves to the next. *Replace All* changes every match in the file as one
+undo step.
+
+**Find in files** (Cmd+Shift+F) searches the open folder in the background
+and lists matching lines grouped by file as they are found. Click a line to
+open the file there; click a file name to fold its results. Tabs with
+unsaved changes are searched as they are in the editor. `.git`, `target*`
+and `node_modules` are skipped, as are binary files and files over 4 MB.
+
 ## Keys
 
 `Cmd` below is `Ctrl` on Linux and Windows.
@@ -77,6 +93,8 @@ and a cell in the sheet. `assets/make_icons.py` redraws the built-in sheet.
 | Ctrl+Tab / Ctrl+Shift+Tab    | Next / previous tab                     |
 | Cmd+B                        | Show or hide the sidebar                |
 | Cmd+F                        | Find; Enter / Shift+Enter to step       |
+| Cmd+Option+F (Ctrl+H)        | Find and replace                        |
+| Cmd+Shift+F                  | Find in files                           |
 | F3 / Shift+F3 (Cmd+G on Mac) | Next / previous match                   |
 | Ctrl+G                       | Go to line (`120` or `120:9`)           |
 | Cmd+/                        | Toggle line comment                     |
@@ -101,14 +119,15 @@ minimap to scroll.
 | `src/theme.rs`     | Theme loading and the chrome palette derived from a theme |
 | `src/editor.rs`    | The painted editor: gutter, text, caret, minimap, input |
 | `src/tree.rs`      | Folder sidebar, file index, fuzzy matching              |
+| `src/search.rs`    | Find in files: background search and its results        |
 | `src/icons.rs`     | Icon sprite sheets: built-in, custom, name-to-icon map  |
 | `src/main.rs`      | Window, tabs, status bar, find, dialogs, shortcuts      |
 
-`cargo test` covers the buffer, the highlighter and the icon mapping.
+`cargo test` covers the buffer, the highlighter, searching and the icon mapping.
 
 ## Not there yet
 
-Multiple cursors, find-and-replace, find in files, bracket auto-closing,
+Multiple cursors, regex search, replace across files, bracket auto-closing,
 soft wrap, split panes, and reloading files changed on disk by another
 program.
 

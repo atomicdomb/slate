@@ -502,6 +502,19 @@ impl Buffer {
         });
     }
 
+    /// Replace several ranges with the same text as one undo step. The
+    /// ranges must be in document order and must not overlap.
+    pub fn replace_ranges(&mut self, ranges: &[(Pos, Pos)], text: &str) {
+        self.edit(EditKind::Other, |b| {
+            // Back to front, so earlier ranges keep their positions.
+            for (from, to) in ranges.iter().rev() {
+                b.replace(*from, *to, text);
+            }
+            b.cursor = b.clamp(b.cursor);
+            b.anchor = b.cursor;
+        });
+    }
+
     pub fn duplicate_line(&mut self) {
         let (first, last) = self.selected_lines();
         let block = self.lines[first..=last].join("\n");
@@ -838,6 +851,23 @@ mod tests {
         b.move_to(Pos::new(1, 0), false);
         b.delete_line();
         assert_eq!(b.text(), "a");
+    }
+
+    #[test]
+    fn replace_ranges_is_one_undo_step() {
+        let mut b = buf("let a = a + a;\nfn a() {}\n");
+        let ranges = [
+            (Pos::new(0, 4), Pos::new(0, 5)),
+            (Pos::new(0, 8), Pos::new(0, 9)),
+            (Pos::new(0, 12), Pos::new(0, 13)),
+            (Pos::new(1, 3), Pos::new(1, 4)),
+        ];
+        b.replace_ranges(&ranges, "total");
+        assert_eq!(b.text(), "let total = total + total;\nfn total() {}\n");
+        b.undo();
+        assert_eq!(b.text(), "let a = a + a;\nfn a() {}\n");
+        b.redo();
+        assert_eq!(b.text(), "let total = total + total;\nfn total() {}\n");
     }
 
     #[test]

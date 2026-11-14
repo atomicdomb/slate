@@ -7,9 +7,11 @@ mod buffer;
 mod editor;
 mod highlight;
 mod icons;
+mod search;
 mod theme;
 mod tree;
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use eframe::egui::{
@@ -18,13 +20,14 @@ use eframe::egui::{
 };
 use syntect::parsing::SyntaxSet;
 
-use buffer::{Buffer, Indent, Pos};
-use editor::{find_in_line, Reveal, View};
+use buffer::{Buffer, EditKind, Indent, Pos};
+use editor::{Query, Reveal, View};
 use highlight::Highlighter;
 use theme::{Palette, Themes};
 
 const APP_ID: &str = "slate";
 const TAB_HEIGHT: f32 = 34.0;
+const RESULT_ROW: f32 = 21.0;
 
 struct Doc {
     path: Option<PathBuf>,
@@ -37,8 +40,10 @@ struct Doc {
 #[derive(Default)]
 struct Find {
     open: bool,
-    query: String,
-    case: bool,
+    /// Show the replace row too.
+    replace: bool,
+    query: Query,
+    with: String,
     grab_focus: bool,
 }
 
@@ -65,7 +70,13 @@ enum Action {
     Syntax(String),
     Indent(Indent),
     FindNext { forward: bool, from_start: bool },
+    Replace,
+    ReplaceAll,
     CloseFind,
+    /// Open a file and select columns `start..end` on `line`.
+    OpenAt { path: PathBuf, line: usize, start: usize, end: usize },
+    Search,
+    CloseSearch,
     OpenFile,
     OpenFolder,
 }
@@ -84,6 +95,7 @@ struct App {
     branch: Option<String>,
     sidebar: bool,
     find: Find,
+    search: search::Search,
     quick: Option<QuickOpen>,
     goto: Option<String>,
     prompt: Option<Prompt>,
@@ -152,6 +164,7 @@ impl App {
             branch: None,
             sidebar: true,
             find: Find::default(),
+            search: search::Search::default(),
             quick: None,
             goto: None,
             prompt: None,
@@ -303,9 +316,9 @@ impl App {
     /// `from_start` searches from the start of the selection, so the match
     /// under the caret grows as the query is typed.
     fn find_next(&mut self, forward: bool, from_start: bool, now: f64) {
-        let (query, case) = (self.find.query.clone(), self.find.case);
+        let query = self.find.query.clone();
         let Some(doc) = self.docs.get_mut(self.active) else { return };
-        if query.is_empty() {
+        if query.text.is_empty() {
             return;
         }
         let buf = &mut doc.buf;
@@ -316,7 +329,7 @@ impl App {
         // the part on the other side of the caret.
         for step in 0..=n {
             let line = if forward { (lo.line + step) % n } else { (hi.line + n - step % n) % n };
-            let hits = find_in_line(&buf.lines[line], &query, case);
+            let hits = query.matches(&buf.lines[line]);
             let pick = if forward {
                 let after = if from_start { lo.col } else { hi.col };
                 hits.iter().find(|(a, _)| step > 0 || *a >= after)
@@ -334,18 +347,94 @@ impl App {
                 buf.move_to(b, true);
                 doc.view.reveal = Reveal::Center;
             }
-            None => self.say(format!("No match for “{query}”"), now),
+            None => self.say(format!("No match for “{}”", query.text), now),
         }
     }
 
-    fn open_find(&mut self) {
-        if let Some(doc) = self.docs.get(self.active) {
-            if let Some(sel) = doc.buf.selected_text().filter(|s| !s.contains('\n')) {
-                self.find.query = sel;
+    /// Replace the match under the selection, if there is one, and move
+    /// on to the next.
+    fn replace_one(&mut self, now: f64) {
+        let (query, with) = (self.find.query.clone(), self.find.with.clone());
+        if let Some(doc) = self.docs.get_mut(self.active) {
+            if let Some((a, b)) = doc.buf.selection() {
+                if a.line == b.line && query.matches(&doc.buf.lines[a.line]).contains(&(a.col, b.col)) {
+                    doc.buf.insert(&with, EditKind::Other);
+                }
             }
         }
+        self.find_next(true, false, now);
+    }
+
+    /// Replace every match in the active tab, as a single undo step.
+    fn replace_all(&mut self, now: f64) {
+        let (query, with) = (self.find.query.clone(), self.find.with.clone());
+        let Some(doc) = self.docs.get_mut(self.active) else { return };
+        let ranges: Vec<(Pos, Pos)> = doc
+            .buf
+            .lines
+            .iter()
+            .enumerate()
+            .flat_map(|(line, text)| {
+                query.matches(text).into_iter().map(move |(a, b)| (Pos::new(line, a), Pos::new(line, b)))
+            })
+            .collect();
+        if ranges.is_empty() {
+            return self.say(format!("No match for “{}”", query.text), now);
+        }
+        doc.buf.replace_ranges(&ranges, &with);
+        doc.view.reveal = Reveal::Nearest;
+        let n = ranges.len();
+        self.say(format!("Replaced {n} occurrence{}", if n == 1 { "" } else { "s" }), now);
+    }
+
+    /// The selection, if it is the sort of thing one searches for.
+    fn selection_for_search(&self) -> Option<String> {
+        let doc = self.docs.get(self.active)?;
+        doc.buf.selected_text().filter(|s| !s.contains('\n'))
+    }
+
+    fn open_find(&mut self, replace: bool) {
+        if let Some(sel) = self.selection_for_search() {
+            self.find.query.text = sel;
+        }
         self.find.open = true;
+        self.find.replace = replace;
         self.find.grab_focus = true;
+    }
+
+    fn open_search(&mut self, now: f64) {
+        if self.root.is_none() {
+            return self.say("Open a folder to search in files", now);
+        }
+        if let Some(sel) = self.selection_for_search() {
+            self.search.query.text = sel;
+        }
+        self.search.open = true;
+        self.search.grab_focus = true;
+    }
+
+    fn start_search(&mut self, ctx: &egui::Context) {
+        let Some(root) = &mut self.root else { return };
+        // Re-read the file list so files created since are included.
+        self.files = tree::index(&root.path);
+        let unsaved: HashMap<PathBuf, String> = self
+            .docs
+            .iter()
+            .filter(|d| d.buf.dirty)
+            .filter_map(|d| Some((d.path.clone()?, d.buf.lines.join("\n"))))
+            .collect();
+        self.search.start(&root.path, self.files.clone(), unsaved, ctx);
+    }
+
+    fn open_at(&mut self, path: &Path, line: usize, start: usize, end: usize, now: f64) {
+        self.open_path(path, now);
+        let Some(doc) = self.docs.get_mut(self.active) else { return };
+        if doc.path.as_deref() != Some(path) {
+            return;
+        }
+        doc.buf.move_to(Pos::new(line, start), false);
+        doc.buf.move_to(Pos::new(line, end), true);
+        doc.view.reveal = Reveal::Center;
     }
 
     fn pick_file(&mut self, now: f64) {
@@ -394,10 +483,15 @@ impl App {
             q.hits = (0..self.files.len().min(200)).collect();
             self.quick = Some(q);
         }
-        if hit(cmd, Key::F) && !self.docs.is_empty() {
-            self.open_find();
-        }
         let mac = cfg!(target_os = "macos");
+        let replace_keys = if mac { hit(cmd | Modifiers::ALT, Key::F) } else { hit(cmd, Key::H) };
+        if hit(cmd_shift, Key::F) {
+            self.open_search(now);
+        } else if replace_keys && !self.docs.is_empty() {
+            self.open_find(true);
+        } else if hit(cmd, Key::F) && !self.docs.is_empty() {
+            self.open_find(false);
+        }
         if hit(Modifiers::SHIFT, Key::F3) || (mac && hit(cmd_shift, Key::G)) {
             self.find_next(false, false, now);
         } else if hit(Modifiers::NONE, Key::F3) || (mac && hit(cmd, Key::G)) {
@@ -574,53 +668,185 @@ impl App {
             return;
         }
         let pal = self.pal.clone();
-        let count: usize = self.docs.get(self.active).map_or(0, |d| {
-            d.buf.lines.iter().map(|l| find_in_line(l, &self.find.query, self.find.case).len()).sum()
-        });
+        let count: usize = self
+            .docs
+            .get(self.active)
+            .map_or(0, |d| d.buf.lines.iter().map(|l| self.find.query.matches(l).len()).sum());
         let frame = Frame::new().fill(pal.panel).inner_margin(Margin::symmetric(10, 6));
+        let find = &mut self.find;
         egui::TopBottomPanel::bottom("find").frame(frame).show_separator_line(false).show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                if ui.selectable_label(self.find.case, "Aa").on_hover_text("Match case").clicked() {
-                    self.find.case = !self.find.case;
-                }
-                let field = egui::TextEdit::singleline(&mut self.find.query)
+            let enter = |ui: &egui::Ui, resp: &egui::Response| resp.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
+            let row = 22.0;
+            ui.spacing_mut().interact_size.y = row;
+            let field_width = (ui.available_width() - 470.0).max(120.0);
+            fn field<'a>(text: &'a mut String, hint: &'static str, width: f32, height: f32) -> egui::TextEdit<'a> {
+                egui::TextEdit::singleline(text)
                     .font(FontId::monospace(editor::FONT_SIZE))
-                    .hint_text("Find")
-                    .desired_width((ui.available_width() - 290.0).max(120.0));
-                let resp = ui.add(field);
-                if std::mem::take(&mut self.find.grab_focus) {
-                    resp.request_focus();
-                }
-                if resp.changed() {
-                    actions.push(Action::FindNext { forward: true, from_start: true });
-                }
-                if resp.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
-                    let forward = !ui.input(|i| i.modifiers.shift);
-                    actions.push(Action::FindNext { forward, from_start: false });
-                    resp.request_focus();
-                }
-                if ui.button("Find").clicked() {
-                    actions.push(Action::FindNext { forward: true, from_start: false });
-                }
-                if ui.button("Find Prev").clicked() {
-                    actions.push(Action::FindNext { forward: false, from_start: false });
-                }
-                let summary = match count {
-                    _ if self.find.query.is_empty() => String::new(),
-                    0 => "No matches".to_string(),
-                    1 => "1 match".to_string(),
-                    n => format!("{n} matches"),
-                };
-                ui.label(RichText::new(summary).color(pal.dim));
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui.button("×").clicked() {
+                    .hint_text(hint)
+                    .desired_width(width)
+                    .min_size(vec2(0.0, height))
+                    .vertical_align(Align::Center)
+            }
+            // Columns rather than rows, so Tab goes from the find field
+            // straight to the replace field.
+            ui.horizontal_top(|ui| {
+                query_toggles(ui, &mut find.query);
+                ui.vertical(|ui| {
+                    let resp = ui.add(field(&mut find.query.text, "Find", field_width, row));
+                    if std::mem::take(&mut find.grab_focus) {
+                        resp.request_focus();
+                    }
+                    if resp.changed() {
+                        actions.push(Action::FindNext { forward: true, from_start: true });
+                    }
+                    if enter(ui, &resp) {
+                        let forward = !ui.input(|i| i.modifiers.shift);
+                        actions.push(Action::FindNext { forward, from_start: false });
+                        resp.request_focus();
+                    }
+                    if find.replace {
+                        let resp = ui.add(field(&mut find.with, "Replace with", field_width, row));
+                        if enter(ui, &resp) {
+                            actions.push(Action::Replace);
+                            resp.request_focus();
+                        }
+                    }
+                });
+                ui.vertical(|ui| {
+                    ui.horizontal(|ui| {
+                        if ui.button("Find").clicked() {
+                            actions.push(Action::FindNext { forward: true, from_start: false });
+                        }
+                        if ui.button("Find Prev").clicked() {
+                            actions.push(Action::FindNext { forward: false, from_start: false });
+                        }
+                        let summary = match count {
+                            _ if find.query.text.is_empty() => String::new(),
+                            0 => "No matches".to_string(),
+                            1 => "1 match".to_string(),
+                            n => format!("{n} matches"),
+                        };
+                        ui.label(RichText::new(summary).color(pal.dim));
+                    });
+                    if find.replace {
+                        ui.horizontal(|ui| {
+                            if ui.button("Replace").clicked() {
+                                actions.push(Action::Replace);
+                            }
+                            if ui.button("Replace All").clicked() {
+                                actions.push(Action::ReplaceAll);
+                            }
+                        });
+                    }
+                });
+                ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
+                    if ui.button("×").on_hover_text("Close (Esc)").clicked() {
                         actions.push(Action::CloseFind);
+                    }
+                    if ui.selectable_label(find.replace, "Replace…").clicked() {
+                        find.replace = !find.replace;
                     }
                 });
             });
         });
         if ctx.input(|i| i.key_pressed(Key::Escape)) {
             actions.push(Action::CloseFind);
+        }
+    }
+
+    fn search_panel(&mut self, ctx: &egui::Context, actions: &mut Vec<Action>) {
+        if !self.search.open {
+            return;
+        }
+        self.search.poll();
+        let Some(root) = self.root.as_ref().map(|r| r.path.clone()) else { return };
+        let pal = self.pal.clone();
+        let icons = &self.icons;
+        let search = &mut self.search;
+        let frame = Frame::new().fill(pal.panel).inner_margin(Margin { left: 0, right: 0, top: 6, bottom: 0 });
+        egui::TopBottomPanel::bottom("search")
+            .resizable(true)
+            .default_height(290.0)
+            .height_range(110.0..=700.0)
+            .frame(frame)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.add_space(10.0);
+                    query_toggles(ui, &mut search.query);
+                    let field = egui::TextEdit::singleline(&mut search.query.text)
+                        .font(FontId::monospace(editor::FONT_SIZE))
+                        .hint_text("Find in files")
+                        .desired_width((ui.available_width() - 470.0).max(120.0));
+                    let resp = ui.add(field);
+                    if std::mem::take(&mut search.grab_focus) {
+                        resp.request_focus();
+                    }
+                    let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
+                    if enter || ui.button("Find").clicked() {
+                        actions.push(Action::Search);
+                    }
+                    ui.label(RichText::new(search.summary()).color(pal.dim));
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        ui.add_space(10.0);
+                        if ui.button("×").on_hover_text("Close (Esc)").clicked() {
+                            actions.push(Action::CloseSearch);
+                        }
+                    });
+                });
+                ui.add_space(6.0);
+
+                // One row per file header and per matching line.
+                let rows: Vec<(usize, Option<usize>)> = search
+                    .results
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(f, file)| {
+                        let hits = if file.collapsed { 0 } else { file.hits.len() };
+                        std::iter::once((f, None)).chain((0..hits).map(move |h| (f, Some(h))))
+                    })
+                    .collect();
+                let mono = FontId::monospace(12.5);
+                let mut toggle = None;
+                ui.spacing_mut().item_spacing.y = 0.0;
+                ScrollArea::vertical().auto_shrink(false).show_rows(ui, RESULT_ROW, rows.len(), |ui, range| {
+                    for &(f, hit) in &rows[range] {
+                        let file = &search.results[f];
+                        let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), RESULT_ROW), Sense::click());
+                        if resp.hovered() {
+                            ui.painter().rect_filled(rect, 0.0, pal.hover);
+                        }
+                        let p = ui.painter().with_clip_rect(rect);
+                        let mid = rect.center().y;
+                        match hit {
+                            None => {
+                                let name = file.path.rsplit('/').next().unwrap_or(&file.path);
+                                let at = Rect::from_min_size(pos2(rect.left() + 12.0, mid - 8.0), vec2(16.0, 16.0));
+                                icons.paint(&p, icons::Icon::for_file(name), at);
+                                let end = p.text(pos2(at.right() + 7.0, mid), Align2::LEFT_CENTER, &file.path, FontId::proportional(13.0), pal.fg);
+                                p.text(pos2(end.right() + 10.0, mid), Align2::LEFT_CENTER, file.matches.to_string(), FontId::proportional(12.0), pal.dim);
+                                if resp.clicked() {
+                                    toggle = Some(f);
+                                }
+                            }
+                            Some(h) => {
+                                let hit = &file.hits[h];
+                                let number_right = rect.left() + 82.0;
+                                p.text(pos2(number_right, mid), Align2::RIGHT_CENTER, (hit.line + 1).to_string(), mono.clone(), pal.gutter_fg);
+                                let galley = ui.fonts(|fonts| fonts.layout_job(snippet(&hit.text, &search.ran, &mono, &pal)));
+                                p.galley(pos2(number_right + 14.0, mid - galley.size().y / 2.0), galley, pal.fg);
+                                if resp.clicked() {
+                                    actions.push(Action::OpenAt { path: root.join(&file.path), line: hit.line, start: hit.start, end: hit.end });
+                                }
+                            }
+                        }
+                    }
+                });
+                if let Some(f) = toggle {
+                    search.results[f].collapsed ^= true;
+                }
+            });
+        if ctx.input(|i| i.key_pressed(Key::Escape)) && !self.find.open {
+            actions.push(Action::CloseSearch);
         }
     }
 
@@ -631,8 +857,7 @@ impl App {
             let Some(doc) = self.docs.get_mut(self.active) else {
                 return welcome(ui, &self.pal, actions);
             };
-            let find = (self.find.open && !self.find.query.is_empty())
-                .then_some((self.find.query.as_str(), self.find.case));
+            let find = (self.find.open && !self.find.query.text.is_empty()).then_some(&self.find.query);
             let env = editor::Env {
                 pal: &self.pal,
                 ss: &self.ss,
@@ -834,6 +1059,15 @@ impl App {
                     }
                 }
                 Action::FindNext { forward, from_start } => self.find_next(forward, from_start, now),
+                Action::Replace => self.replace_one(now),
+                Action::ReplaceAll => self.replace_all(now),
+                Action::OpenAt { path, line, start, end } => self.open_at(&path, line, start, end, now),
+                Action::Search => self.start_search(ctx),
+                Action::CloseSearch => {
+                    self.search.open = false;
+                    self.search.stop();
+                    self.focus_editor = true;
+                }
                 Action::CloseFind => {
                     self.find.open = false;
                     self.focus_editor = true;
@@ -843,6 +1077,39 @@ impl App {
             }
         }
     }
+}
+
+/// The "match case" and "whole word" switches shared by both find bars.
+fn query_toggles(ui: &mut egui::Ui, query: &mut Query) {
+    if ui.selectable_label(query.case, "Aa").on_hover_text("Match case").clicked() {
+        query.case ^= true;
+    }
+    if ui.selectable_label(query.word, "W").on_hover_text("Whole word").clicked() {
+        query.word ^= true;
+    }
+}
+
+/// A result line with its matches picked out.
+fn snippet(text: &str, query: &Query, font: &FontId, pal: &Palette) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::default();
+    job.wrap.max_width = f32::INFINITY;
+    let chars: Vec<char> = text.chars().collect();
+    let piece = |range: std::ops::Range<usize>| chars[range].iter().collect::<String>();
+    let plain = egui::TextFormat { font_id: font.clone(), color: pal.fg.gamma_multiply(0.85), ..Default::default() };
+    let marked = egui::TextFormat {
+        font_id: font.clone(),
+        color: pal.fg,
+        background: pal.find.gamma_multiply(0.3),
+        ..Default::default()
+    };
+    let mut at = 0;
+    for (a, b) in query.matches(text) {
+        job.append(&piece(at..a), 0.0, plain.clone());
+        job.append(&piece(a..b), 0.0, marked.clone());
+        at = b;
+    }
+    job.append(&piece(at..chars.len()), 0.0, plain);
+    job
 }
 
 fn welcome(ui: &mut egui::Ui, pal: &Palette, actions: &mut Vec<Action>) {
@@ -905,6 +1172,7 @@ impl eframe::App for App {
         if !self.docs.is_empty() {
             self.tab_bar(ctx, &mut actions);
         }
+        self.search_panel(ctx, &mut actions);
         self.find_bar(ctx, &mut actions);
         self.central(ctx, &mut actions);
         self.quick_open(ctx, &mut actions);
