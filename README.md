@@ -21,8 +21,10 @@ the tools macOS ships with. Run it again after changing the code.
 
 The app registers as an editor for text files and folders, so Finder's
 *Open With → Slate* works, as does dropping a file or folder on the Dock
-icon. A file opens in the window whose project contains it (otherwise the
-front window); a folder gets its own window. Slate never makes itself the
+icon. A file opens in the window whose project contains it. A file from
+anywhere else opens in a separate window with no sidebar, shared with any
+other such files, so it never appears under an unrelated project. A folder
+gets its own window. Slate never makes itself the
 default app for a file type; do that per type in Finder's *Get Info* if you
 want it. The receiving end is `src/macos_open.m` and `src/open_events.rs`.
 

@@ -152,8 +152,11 @@ impl App {
     }
 
     /// Open something the OS handed us (Finder's "Open With", the Dock).
-    /// A folder gets a window; a file goes to the window whose project it
-    /// belongs to, or failing that the one in front.
+    ///
+    /// A folder gets a window. A file goes to the window whose project
+    /// contains it. A file that belongs to no open project is kept apart
+    /// from them: it opens in a window with no folder, and so no sidebar,
+    /// shared with any other loose files.
     fn open_external(&mut self, path: PathBuf, ctx: &egui::Context, now: f64) {
         let path = std::fs::canonicalize(&path).unwrap_or(path);
         if path.is_dir() {
@@ -162,7 +165,14 @@ impl App {
         }
         let depth = |w: &Workspace| w.folder().filter(|f| path.starts_with(f)).map(|f| f.components().count());
         let owner = (0..self.windows.len()).filter(|i| depth(&self.windows[*i]).is_some()).max_by_key(|i| depth(&self.windows[*i]));
-        let i = owner.or_else(|| self.windows.iter().position(|w| w.focused)).unwrap_or(0);
+        let loose = || self.windows.iter().position(|w| w.folder().is_none());
+        let i = match owner.or_else(loose) {
+            Some(i) => i,
+            None => {
+                self.add_window(None);
+                self.windows.len() - 1
+            }
+        };
         self.windows[i].open_path(&path, now);
         let viewport = if i == 0 { ViewportId::ROOT } else { viewport_of(&self.windows[i]) };
         ctx.send_viewport_cmd_to(viewport, ViewportCommand::Focus);
