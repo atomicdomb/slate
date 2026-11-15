@@ -24,9 +24,10 @@ The app registers as an editor for text files and folders, so Finder's
 icon. A file opens in the window whose project contains it. A file from
 anywhere else opens in a separate window with no sidebar, shared with any
 other such files, so it never appears under an unrelated project. A folder
-gets its own window. Slate never makes itself the
-default app for a file type; do that per type in Finder's *Get Info* if you
-want it. The receiving end is `src/macos_open.m` and `src/open_events.rs`.
+gets its own window. Slate makes itself the default app for `.rs` files only (macOS has no
+built-in type for them, so Slate defines one); for other types, choose it in
+Finder's *Get Info* if you want it; such files then show Slate's document icon (`assets/DocumentIcon.png`)
+in Finder. The receiving end is `src/macos_open.m` and `src/open_events.rs`.
 
 With no arguments it reopens the folders that were open last time. Several
 folders on the command line open one window each.
