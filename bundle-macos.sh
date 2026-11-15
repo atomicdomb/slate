@@ -72,9 +72,12 @@ cat > "$APP/Contents/Info.plist" <<PLIST
             <key>UTTypeIdentifier</key>    <string>local.slate.editor.rust-source</string>
             <key>UTTypeDescription</key>   <string>Rust source</string>
             <key>UTTypeIconFile</key>      <string>Document</string>
+            <!-- Deliberately plain data, not "public.source-code": for text
+                 types Finder shows a preview of the contents instead of the
+                 icon. Change it back to get Quick Look text previews. -->
             <key>UTTypeConformsTo</key>
             <array>
-                <string>public.source-code</string>
+                <string>public.data</string>
             </array>
             <key>UTTypeTagSpecification</key>
             <dict>
